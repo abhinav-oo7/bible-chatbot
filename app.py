@@ -5,6 +5,7 @@ import faiss
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
+import urllib.request
 
 # ---------------------------
 # Page Configuration
@@ -42,11 +43,27 @@ def load_models():
 @st.cache_resource
 def load_faiss_index():
     """Load the Bible data and the FAISS index from disk."""
-    embeddings_file = "gemini_bible_embeddings.npy"
-    csv_file = "KJV.csv" # Using the original CSV for text
     
-    if not os.path.exists(embeddings_file) or not os.path.exists(csv_file):
-        st.error(f"Missing required files. Make sure {embeddings_file} and {csv_file} are in the same folder.")
+    embeddings_file = "gemini_bible_embeddings_v2.npy"
+    csv_file = "KJV.csv"
+    
+    # --- THIS IS THE NEW DOWNLOAD LOGIC ---
+    FILE_URL = "https://github.com/abhinav-oo7/bible-chatbot/releases/download/v1/gemini_bible_embeddings.npy"
+
+    # Check if the embedding file exists, if not, download it
+    if not os.path.exists(embeddings_file):
+        with st.spinner(f"Downloading {embeddings_file} (184MB)... This may take a moment."):
+            try:
+                urllib.request.urlretrieve(FILE_URL, embeddings_file)
+                st.success("Download complete!")
+            except Exception as e:
+                st.error(f"Error downloading file: {e}")
+                st.stop()
+    # ----------------------------------------
+
+    # Check if the CSV file exists (it should be in your Git repo)
+    if not os.path.exists(csv_file):
+        st.error(f"Missing required file: {csv_file}")
         st.stop()
         
     try:
@@ -54,7 +71,7 @@ def load_faiss_index():
         bible_df = pd.read_csv(csv_file)
         bible_df['Text'] = bible_df['Text'].astype(str)
         
-        # Load the embeddings
+        # Load the embeddings (which are now guaranteed to be downloaded)
         embeddings = np.load(embeddings_file)
         
         # Build the FAISS index
