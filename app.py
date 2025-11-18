@@ -3,7 +3,8 @@ import pandas as pd
 import numpy as np
 import faiss
 import os
-from dotenv import load_dotenv
+# load_dotenv is no longer needed for Vercel, but safe to keep
+from dotenv import load_dotenv 
 import google.generativeai as genai
 import urllib.request
 
@@ -22,10 +23,15 @@ st.set_page_config(
 @st.cache_resource
 def load_models():
     """Load and configure API keys and models once."""
-    load_dotenv()
-    api_key = os.getenv("GOOGLE_API_KEY")
+    
+    # On Vercel, the key comes from Environment Variables
+    # On your local machine, you can still use a .env file
+    load_dotenv() 
+    api_key = os.getenv("GOOGLE_API_KEY") 
+    
     if not api_key:
-        st.error("GOOGLE_API_KEY not found in .env file. Please add it.")
+        # Updated error message for Vercel
+        st.error("GOOGLE_API_KEY not found. Please add it to your Vercel Project Environment Variables.")
         st.stop()
         
     genai.configure(api_key=api_key)
@@ -44,13 +50,15 @@ def load_models():
 def load_faiss_index():
     """Load the Bible data and the FAISS index from disk."""
     
+    # This name is the local file name Vercel will create
     embeddings_file = "gemini_bible_embeddings_v2.npy"
     csv_file = "KJV.csv"
     
-    # --- THIS IS THE NEW DOWNLOAD LOGIC ---
+    # This is the public URL to your GitHub Release file
     FILE_URL = "https://github.com/abhinav-oo7/bible-chatbot/releases/download/v1/gemini_bible_embeddings.npy"
 
     # Check if the embedding file exists, if not, download it
+    # This will run the first time the Vercel instance starts
     if not os.path.exists(embeddings_file):
         with st.spinner(f"Downloading {embeddings_file} (184MB)... This may take a moment."):
             try:
@@ -108,9 +116,6 @@ def search_bible(query, top_k=5):
 # ---------------------------
 # Generate Answer Function
 # ---------------------------
-# ---------------------------
-# Generate Answer Function
-# ---------------------------
 def get_chatbot_response(question):
     """Searches for context and generates a streamed response."""
     top_verses = search_bible(question, top_k=5)
@@ -155,6 +160,7 @@ Answer:"""
     except Exception as e:
         st.error(f"Error generating response: {e}")
         return None
+
 # ---------------------------
 # Streamlit App UI
 # ---------------------------
