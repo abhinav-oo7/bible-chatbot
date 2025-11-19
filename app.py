@@ -4,7 +4,6 @@ import numpy as np
 import faiss
 import os
 import google.generativeai as genai
-import urllib.request
 
 # ---------------------------
 # Page Configuration
@@ -16,105 +15,99 @@ st.set_page_config(
 )
 
 # ---------------------------
-# Load API Key & Models (Cached)
+# Load API Key & Models
 # ---------------------------
 @st.cache_resource
-def load_models():
-    """Load and configure API keys and models once."""
-    
-    # On Render, we use Environment Variables directly
+def load_config():
+    """Load API keys and configure Gemini."""
     api_key = os.environ.get("GOOGLE_API_KEY")
-    
+    if not api_key:
+        # Fallback for local testing if env var is missing
+        # api_key = st.secrets.get("GOOGLE_API_KEY") 
+        pass
+        
     if not api_key:
         st.error("GOOGLE_API_KEY not found. Please add it to your Render Environment Variables.")
         st.stop()
         
     genai.configure(api_key=api_key)
     
-    # Use the fast "flash" model for the chatbot
-    generative_model = genai.GenerativeModel('gemini-flash-latest')
-    
-    # Use the embedding model
+    # Models
+    generative_model = genai.GenerativeModel('gemini-1.5-flash')
     embedding_model = 'models/embedding-001'
     return generative_model, embedding_model
 
 # ---------------------------
-# Load Data & FAISS Index (Cached)
+# Load Data & Compressed Index
 # ---------------------------
 @st.cache_resource
-def load_faiss_index():
-    """Load the Bible data and the FAISS index from disk."""
+def load_data():
+    """Load the CSV and the pre-built compressed FAISS index."""
     
-    # This matches the filename defined in render_build.sh
-    embeddings_file = "gemini_bible_embeddings_v2.npy"
-    csv_file = "KJV.csv"
-    
-    # Fallback URL (Safety net if build script fails)
-    FILE_URL = "https://github.com/abhinav-oo7/bible-chatbot/releases/download/v1/gemini_bible_embeddings.npy"
+    index_file = "bible_compressed.index"
+    csv_file = "KJV.csv" # Ensure this file is in your repo
 
-    # Check if file exists (It should be there from render_build.sh)
-    if not os.path.exists(embeddings_file):
-        with st.spinner(f"Downloading database (184MB)..."):
-            try:
-                urllib.request.urlretrieve(FILE_URL, embeddings_file)
-                st.success("Download complete!")
-            except Exception as e:
-                st.error(f"Error downloading file: {e}")
-                st.stop()
+    if not os.path.exists(index_file):
+        st.error(f"Index file '{index_file}' not found. Please run build_compressed_index.py locally and upload the result.")
+        st.stop()
 
     if not os.path.exists(csv_file):
-        st.error(f"Missing required file: {csv_file}")
+        st.error(f"CSV file '{csv_file}' not found.")
         st.stop()
         
     try:
-        # Load data
-        bible_df = pd.read_csv(csv_file)
+        # 1. Load Text Data
+        # Optimization: Only load necessary columns to save RAM
+        bible_df = pd.read_csv(csv_file, usecols=['Book', 'Chapter', 'Verse', 'Text'])
         bible_df['Text'] = bible_df['Text'].astype(str)
-        embeddings = np.load(embeddings_file)
         
-        # Build FAISS index
-        dimension = embeddings.shape[1]
-        index = faiss.IndexFlatL2(dimension)
-        index.add(np.array(embeddings).astype('float32'))
+        # 2. Load FAISS Index (IVF-PQ)
+        # This loads the tiny compressed file directly
+        index = faiss.read_index(index_file)
+        
+        # Set nprobe (how many clusters to search). 
+        # Higher = more accurate but slower. 10 is a sweet spot.
+        index.nprobe = 10
         
         return bible_df, index
     except Exception as e:
         st.error(f"Error loading data: {e}")
         st.stop()
 
-# --- Load everything ---
-generative_model, embedding_model = load_models()
-bible_df, faiss_index = load_faiss_index()
+# --- Initialize ---
+generative_model, embedding_model = load_config()
+bible_df, faiss_index = load_data()
 
 # ---------------------------
-# Semantic Search Function
+# Logic
 # ---------------------------
 def search_bible(query, top_k=5):
+    # Embed the query
     response = genai.embed_content(
         model=embedding_model,
         content=query,
         task_type="RETRIEVAL_QUERY"
     )
     query_emb = np.array([response['embedding']]).astype('float32')
-    _, idx = faiss_index.search(query_emb, top_k)
-    results = bible_df.iloc[idx[0]]
+    
+    # Search the compressed index
+    distances, indices = faiss_index.search(query_emb, top_k)
+    
+    # Fetch results from DataFrame
+    results = bible_df.iloc[indices[0]]
     return results
 
-# ---------------------------
-# Generate Answer Function
-# ---------------------------
 def get_chatbot_response(question):
     top_verses = search_bible(question, top_k=5)
 
     context = "\n".join(
-        top_verses['Book'] + " " +
-        top_verses['Chapter'].astype(str) + ":" +
-        top_verses['Verse'].astype(str) + " - " +
-        top_verses['Text']
+        f"{row['Book']} {row['Chapter']}:{row['Verse']} - {row['Text']}"
+        for _, row in top_verses.iterrows()
     )
 
     prompt = f"""You are a helpful and knowledgeable Bible assistant.
-Your goal is to answer the user's question using the context below.
+Your goal is to answer the user's question using ONLY the context provided below.
+If the context doesn't contain the answer, gently say so.
 
 Context:
 {context}
@@ -123,23 +116,19 @@ Question: {question}
 Answer:"""
 
     try:
-        response_iterator = generative_model.generate_content(prompt, stream=True)
-        
-        # Generator to yield text chunks for Streamlit
-        def stream_generator(iterator):
-            for chunk in iterator:
-                if chunk.text:
-                    yield chunk.text
-                    
-        return stream_generator(response_iterator)
+        response = generative_model.generate_content(prompt, stream=True)
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
     except Exception as e:
         st.error(f"Error generating response: {e}")
         return None
 
 # ---------------------------
-# Streamlit App UI
+# UI
 # ---------------------------
 st.title("📖 Bible Chatbot")
+st.caption("Powered by Gemini Flash & FAISS IVF-PQ")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
