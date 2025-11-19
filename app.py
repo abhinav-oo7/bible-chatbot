@@ -33,7 +33,7 @@ def load_config():
     genai.configure(api_key=api_key)
     
     # Models
-    generative_model = genai.GenerativeModel('gemini-1.5-flash')
+    generative_model = genai.GenerativeModel('gemini-flash-latest')
     embedding_model = 'models/embedding-001'
     return generative_model, embedding_model
 
